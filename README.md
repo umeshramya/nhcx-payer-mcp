@@ -8,7 +8,7 @@ Designed for external integrators testing their NHCX provider integration. No mo
 
 ```bash
 # 1. Set your credentials (required)
-export NDHM_CLIENT_ID=SBX_000676
+export NDHM_CLIENT_ID=SBX_000XXX
 export NDHM_CLIENT_SECRET=your-sandbox-secret
 
 # 2. Configure your test defaults (optional but recommended)
@@ -35,7 +35,7 @@ Add to your MCP host (Claude Desktop, VS Code, etc.):
       "command": "npx",
       "args": ["nhcx-payer-mcp"],
       "env": {
-        "NDHM_CLIENT_ID": "SBX_000676",
+        "NDHM_CLIENT_ID": "SBX_000XXX",
         "NDHM_CLIENT_SECRET": "your-sandbox-secret",
         "PAYER_ID": "1518",
         "SENDER_CODE": "1000000001",
@@ -52,7 +52,7 @@ Add to your MCP host (Claude Desktop, VS Code, etc.):
 
 | Variable | Description |
 |----------|-------------|
-| `NDHM_CLIENT_ID` | ABDM gateway client ID (sandbox: `SBX_000676`) |
+| `NDHM_CLIENT_ID` | ABDM gateway client ID (sandbox: `SBX_000XXX`) |
 | `NDHM_CLIENT_SECRET` | ABDM gateway client secret |
 
 ### Optional — Defaults
