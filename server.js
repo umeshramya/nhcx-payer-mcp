@@ -43,20 +43,11 @@ function debug(...args) {
 // URL mapping (sandbox default; individual overrides via env vars)
 // ---------------------------------------------------------------------------
 
-const URLS = {
-  sandbox: {
-    userRole: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/v1",
-    processCase: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/wrapper",
-    cmId: "sbx",
-  },
-};
-
 function getUrls() {
-  const base = URLS[config.env] || URLS.sandbox;
   return {
-    userRole: process.env.NHCX_USER_ROLE_URL || base.userRole,
-    processCase: process.env.NHCX_PROCESS_CASE_URL || base.processCase,
-    cmId: base.cmId,
+    userRole: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/v1",
+    processCase: "https://apisbeta.nha.gov.in/pmjay/hcx/nhcxpayerservice/wrapper",
+    cmId: "sbx",
   };
 }
 
