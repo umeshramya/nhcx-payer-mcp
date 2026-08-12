@@ -40,7 +40,7 @@ function debug(...args) {
 }
 
 // ---------------------------------------------------------------------------
-// URL mapping (sandbox default; individual overrides via env vars)
+// Hardcoded API endpoints
 // ---------------------------------------------------------------------------
 
 function getUrls() {
@@ -431,15 +431,40 @@ async function handleProcessCase(args) {
     );
   }
 
-  const step = deriveStep(args.action);
-  const usecase = step ? step.usecase : "CLAIM";
-  const correlationId = args.correlationId;
-
   const token = await getAccessToken();
   const urls = getUrls();
 
   // Strip prefix like "PMJAY/HP/S/2024/R2/" — process/case only accepts numeric ID
   const numericCaseId = args.caseId.includes("/") ? args.caseId.split("/").pop() : args.caseId;
+
+  // Derive usecase from the CURRENT role, not just the action. "Approve"/"Reject"
+  // appear in multiple steps (PREAUTH, MAC, ACO, SHA, Claim Review), so an
+  // action-only first-match wrongly maps them to PREAUTH. The current role is
+  // authoritative for where the case sits in the workflow.
+  let step = null;
+  try {
+    const roleBody = {
+      caseid: args.caseId,
+      payerid: args.receiverCode || config.payerId,
+    };
+    const roleResult = await nhcxApi(urls.userRole, "/get/user-role", token, roleBody);
+    const roleName = roleResult?.currentuserrole;
+    if (roleName) {
+      step = stepForRole(roleName);
+      if (step && !step.actions.includes(args.action)) {
+        return fail(
+          `Action "${args.action}" is not allowed for current role "${roleName}". ` +
+          `Allowed: ${step.actions.join(", ")}`
+        );
+      }
+    }
+  } catch (e) {
+    debug("Could not resolve current role, falling back to action-derived usecase:", e.message);
+  }
+
+  if (!step) step = deriveStep(args.action);
+  const usecase = step ? step.usecase : "CLAIM";
+  const correlationId = args.correlationId;
 
   const body = {
     casenumber: numericCaseId,
