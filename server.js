@@ -418,8 +418,8 @@ async function handleGetUserRole(args) {
   // Enhance with allowed actions for the role
   let roleName = null;
   let allowedActions = [];
-  if (result && result.role) {
-    roleName = result.role;
+  if (result && result.currentuserrole) {
+    roleName = result.currentuserrole;
     const step = stepForRole(roleName);
     if (step) allowedActions = step.actions;
   }
