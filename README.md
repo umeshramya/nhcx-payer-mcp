@@ -111,14 +111,16 @@ Output: { ok, result: { caseId, role, allowedActions[], rawResponse } }
 Execute a payer action on a case. The usecase is derived automatically from the action. Valid actions are validated before the API call.
 
 ```
-Input:  caseId (required)
+Input:  caseId (required) — numeric ID or full prefixed format
+                             (e.g. "2026081210000359" or "PMJAY/HP/S/2024/R2/2026081210000359")
+                             Prefix is auto-stripped for process/case API compatibility.
         action (required) — Approve, Reject, Query, Forward, Pending,
                              cpdApprove, cpdReject, iQuery
         senderCode (required) — provider/sender code
         memberId (required) — patient ABHA/PMJAY ID
         receiverCode (optional, default from env)
         remarks (optional, default "ok")
-        correlationId (optional, auto-generated)
+        correlationId (required) — from original submission, never auto-generated
 Output: { ok, result: { caseId, action, usecase, role, correlationId, rawResponse } }
 ```
 

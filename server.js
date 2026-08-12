@@ -46,7 +46,7 @@ function debug(...args) {
 const URLS = {
   sandbox: {
     userRole: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/v1",
-    processCase: "https://apisbeta.nha.gov.in/pmjay/hcx/nhcxpayerservice/wrapper",
+    processCase: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/wrapper",
     cmId: "sbx",
   },
 };
@@ -263,7 +263,7 @@ function buildTools() {
       description:
         "Act as a payer and perform an action on a case: Approve, Reject, Query, Forward, " +
         "Pending, cpdApprove, cpdReject, iQuery. The usecase is derived automatically from " +
-        "the action. The caseId, action, senderCode, and memberId are required.",
+        "the action. The caseId, action, senderCode, memberId, and correlationId are required.",
       inputSchema: {
         type: "object",
         properties: {
@@ -294,10 +294,10 @@ function buildTools() {
           },
           correlationId: {
             type: "string",
-            description: "Custom correlation ID (auto-generated if omitted)",
+            description: "Correlation ID from the original submission (required — never guess this)",
           },
         },
-        required: ["caseId", "action", "senderCode", "memberId"],
+        required: ["caseId", "action", "senderCode", "memberId", "correlationId"],
       },
     },
     {
@@ -442,13 +442,16 @@ async function handleProcessCase(args) {
 
   const step = deriveStep(args.action);
   const usecase = step ? step.usecase : "CLAIM";
-  const correlationId = args.correlationId || `nhcx-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const correlationId = args.correlationId;
 
   const token = await getAccessToken();
   const urls = getUrls();
 
+  // Strip prefix like "PMJAY/HP/S/2024/R2/" — process/case only accepts numeric ID
+  const numericCaseId = args.caseId.includes("/") ? args.caseId.split("/").pop() : args.caseId;
+
   const body = {
-    casenumber: args.caseId,
+    casenumber: numericCaseId,
     action: args.action,
     receivercode: args.receiverCode || config.payerId,
     usecase,
