@@ -19,7 +19,8 @@ export REAL_ABHA=12345678901234
 export DUMMY_ABHA=12345678904321
 
 # 3. Run via npx (no install needed)
-npx nhcx-payer-mcp
+#    @latest guarantees you get the newest published version (npx caches by version)
+npx nhcx-payer-mcp@latest
 
 # Or install globally
 npm install -g nhcx-payer-mcp
@@ -35,7 +36,7 @@ Add to your MCP host (Claude Desktop, VS Code, etc.):
   "mcpServers": {
     "nhcx-payer": {
       "command": "npx",
-      "args": ["nhcx-payer-mcp"],
+      "args": ["-y", "nhcx-payer-mcp@latest"],
       "env": {
         "NDHM_CLIENT_ID": "SBX_000XXX",
         "NDHM_CLIENT_SECRET": "your-sandbox-secret",
