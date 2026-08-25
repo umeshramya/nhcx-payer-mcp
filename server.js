@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * NHCX Payer MCP Server
  *
@@ -564,7 +565,7 @@ async function handleUpdateAbhaNumber(args) {
 const tools = buildTools();
 
 const server = new Server(
-  { name: "nhcx-payer-mcp", version: "1.6.0" },
+  { name: "nhcx-payer-mcp", version: "1.6.1" },
   { capabilities: { tools: {} } }
 );
 

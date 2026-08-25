@@ -1,6 +1,6 @@
 {
   "name": "nhcx-payer-mcp",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "MCP server to simulate NHCX payer actions — approve, reject, query, or forward preauth and claim cases through the full payer workflow",
   "type": "module",
   "main": "server.js",
