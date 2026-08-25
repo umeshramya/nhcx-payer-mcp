@@ -564,7 +564,7 @@ async function handleUpdateAbhaNumber(args) {
 const tools = buildTools();
 
 const server = new Server(
-  { name: "nhcx-payer-mcp", version: "1.0.0" },
+  { name: "nhcx-payer-mcp", version: "1.5.0" },
   { capabilities: { tools: {} } }
 );
 
