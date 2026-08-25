@@ -30,6 +30,8 @@ const config = {
   payerId: process.env.PAYER_ID || "1518",
   senderCode: process.env.SENDER_CODE || "",
   memberId: process.env.MEMBER_ID || "",
+  realAbha: process.env.REAL_ABHA || "",
+  dummyAbha: process.env.DUMMY_ABHA || "",
   timeout: parseInt(process.env.NHCX_TIMEOUT, 10) || 30000,
   retries: parseInt(process.env.NHCX_RETRIES, 10) || 0,
   debug: process.env.DEBUG === "true",
@@ -47,6 +49,7 @@ function getUrls() {
   return {
     userRole: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/v1",
     processCase: "https://apisbeta.nha.gov.in/pmjay/hcx/nhcxpayerservice/wrapper",
+    updateAbha: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/participanthcxservice",
     cmId: "sbx",
   };
 }
@@ -297,6 +300,30 @@ function buildTools() {
         "Show the full payer workflow: steps, usecase per step, roles, and allowed actions.",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "nhcx_update_abha_number",
+      description:
+        "Map a real ABHA number to a dummy ABHA number for cyclic-procedure claim testing. " +
+        "Replaces the real ABHA captured during biometric authentication with the dummy ABHA " +
+        "used in the claim, so claim validation can locate the dummy beneficiary's biometric " +
+        "records. Intended for lower/test environments only.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          realAbha: {
+            type: "string",
+            description: "Real ABHA number captured during biometric authentication",
+            ...(config.realAbha ? { default: config.realAbha } : {}),
+          },
+          dummyAbha: {
+            type: "string",
+            description: "Dummy ABHA number used in the claim request",
+            ...(config.dummyAbha ? { default: config.dummyAbha } : {}),
+          },
+        },
+        required: ["realAbha", "dummyAbha"],
+      },
+    },
   ];
 }
 
@@ -319,12 +346,15 @@ async function handleValidateConfig() {
     PAYER_ID: config.payerId,
     SENDER_CODE: config.senderCode || "(not set)",
     MEMBER_ID: config.memberId || "(not set)",
+    REAL_ABHA: config.realAbha || "(not set)",
+    DUMMY_ABHA: config.dummyAbha || "(not set)",
     NHCX_TIMEOUT: `${config.timeout}ms`,
     NHCX_RETRIES: config.retries,
     DEBUG: config.debug,
     urls: {
       userRole: urls.userRole,
       processCase: urls.processCase,
+      updateAbha: urls.updateAbha,
       cmId: urls.cmId,
     },
   };
@@ -332,6 +362,7 @@ async function handleValidateConfig() {
   let authResult = null;
   let userRoleReachable = false;
   let processCaseReachable = false;
+  let updateAbhaReachable = false;
 
   if (issues.length === 0) {
     try {
@@ -373,6 +404,17 @@ async function handleValidateConfig() {
       processCaseReachable = false;
       issues.push(`Process-case URL unreachable: ${urls.processCase}`);
     }
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      await fetch(urls.updateAbha, { signal: controller.signal });
+      clearTimeout(timer);
+      updateAbhaReachable = true;
+    } catch {
+      updateAbhaReachable = false;
+      issues.push(`ABHA-update URL unreachable: ${urls.updateAbha}`);
+    }
   }
 
   return ok({
@@ -383,6 +425,7 @@ async function handleValidateConfig() {
       auth: authResult,
       userRoleUrl: userRoleReachable ? "reachable" : "UNREACHABLE",
       processCaseUrl: processCaseReachable ? "reachable" : "UNREACHABLE",
+      updateAbhaUrl: updateAbhaReachable ? "reachable" : "UNREACHABLE",
     },
   });
 }
@@ -493,6 +536,27 @@ function handleWorkflow() {
   return ok({ workflow: WORKFLOW });
 }
 
+async function handleUpdateAbhaNumber(args) {
+  const token = await getAccessToken();
+  const urls = getUrls();
+
+  const realAbha = args.realAbha || config.realAbha;
+  const dummyAbha = args.dummyAbha || config.dummyAbha;
+
+  const body = {
+    realAbha,
+    dummyAbha,
+  };
+
+  const result = await nhcxApi(urls.updateAbha, "/update/abhanumber", token, body);
+
+  return ok({
+    realAbha,
+    dummyAbha,
+    rawResponse: result,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Server setup
 // ---------------------------------------------------------------------------
@@ -521,6 +585,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return await handleProcessCase(args);
       case "nhcx_workflow":
         return handleWorkflow();
+      case "nhcx_update_abha_number":
+        return await handleUpdateAbhaNumber(args);
       default:
         return fail(`Unknown tool: ${name}`);
     }

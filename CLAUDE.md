@@ -22,26 +22,28 @@ Single file: `server.js`. Everything lives in one self-contained ESM module (`"t
 - `NDHM_CLIENT_ID` / `NDHM_CLIENT_SECRET` — required ABDM gateway credentials
 - `NDHM_URL` — auth URL (default `https://dev.abdm.gov.in`)
 - `NHCX_ENV` — `sandbox` (default), `staging`, or `production`; selects API base URLs
-- `PAYER_ID` / `SENDER_CODE` / `MEMBER_ID` — default test values, overridable per tool call
+- `PAYER_ID` / `SENDER_CODE` / `MEMBER_ID` / `REAL_ABHA` / `DUMMY_ABHA` — default test values, overridable per tool call
 - `NHCX_TIMEOUT` / `NHCX_RETRIES` — API resilience
 - `DEBUG=true` — stderr debug logging
 - Individual URL overrides: `NHCX_USER_ROLE_URL`, `NHCX_PROCESS_CASE_URL`
 
 **Auth flow** — ABDM gateway V3 `client_credentials` grant. Token is cached in memory for 15 minutes. `X-CM-ID` header tied to `NHCX_ENV`. Auto-refresh before every API call (no manual login needed).
 
-**API layering** — Two NHA base URLs (switched by `NHCX_ENV`):
+**API layering** — Three NHA base URLs (switched by `NHCX_ENV`):
 - User-role: `apisbx.abdm.gov.in` (sandbox)
 - Process-case: `apisbeta.nha.gov.in` (sandbox)
+- ABHA update: `apisbx.abdm.gov.in` (participant service, sandbox)
 Per-endpoint overrides via env vars take precedence over `NHCX_ENV`.
 
 The `nhcxApi()` helper wraps `fetch` with Bearer auth, timeout (AbortController), configurable retries on 5xx/network errors, and structured error handling (checks `res.ok` before JSON parse, includes HTTP status in errors).
 
-**MCP tools** — 5 tools:
+**MCP tools** — 6 tools:
 - `nhcx_validate_config` — validate env vars, test auth, check API URL reachability
 - `nhcx_login` — authenticate and cache a session token (convenience/connectivity check)
 - `nhcx_get_user_role` — get current payer role + allowed actions for a case (calls sandbox user-role API, enhanced with WORKFLOW lookup)
 - `nhcx_process_case` — act on a case; usecase auto-derived from action, action validated against WORKFLOW before API call, enriched result with computed fields + raw API response
 - `nhcx_workflow` — return the full workflow array with `{ step, usecase, role, actions }` per step
+- `nhcx_update_abha_number` — map a real ABHA number to a dummy ABHA number for cyclic-procedure claim testing (participant service)
 
 **Workflow model** — Single `WORKFLOW` array (source of truth, replaces old `ROLE_ACTIONS` + `WORKFLOW`). 7 steps: 1 PREAUTH + 6 CLAIM. Steps 3 (Medical Audit Committee) and 6 (Claim Review Committee) have distinct `usecase` values. Action names match the NHCX document casing exactly: `Approve`, `Reject`, `Query`, `Forward`, `Pending`, `cpdApprove`, `cpdReject`, `iQuery`.
 
@@ -51,6 +53,6 @@ The `nhcxApi()` helper wraps `fetch` with Bearer auth, timeout (AbortController)
 
 **Dependencies** — Only `@modelcontextprotocol/sdk` v1. Uses `StdioServerTransport` (stdin/stdout — designed to be run by an MCP host, not as an HTTP server). Node >= 18 required.
 
-**Tests** — `tests/server.test.js` using `node:test` (zero extra deps). Covers WORKFLOW structure, action validation, usecase derivation, response envelope format, and API error handling with mocked `fetch`. 26 tests.
+**Tests** — `tests/server.test.js` using `node:test` (zero extra deps). Covers WORKFLOW structure, action validation, usecase derivation, response envelope format, and API error handling with mocked `fetch`. 28 tests.
 
 **npm distribution** — Package `nhcx-payer-mcp` with `bin` entry (`nhcx-payer-mcp` → `server.js`). `files` limited to `server.js`. No build step, no transpilation.

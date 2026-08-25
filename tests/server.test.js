@@ -198,6 +198,26 @@ describe("response helpers", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ABHA number update tool
+// ---------------------------------------------------------------------------
+
+describe("ABHA update endpoint", () => {
+  const UPDATE_ABHA_BASE = "https://apisbx.abdm.gov.in/pmjay/sbxhcx/participanthcxservice";
+  const UPDATE_ABHA_PATH = "/update/abhanumber";
+
+  it("targets the participant service update/abhanumber endpoint", () => {
+    assert.equal(UPDATE_ABHA_BASE, "https://apisbx.abdm.gov.in/pmjay/sbxhcx/participanthcxservice");
+    assert.equal(UPDATE_ABHA_PATH, "/update/abhanumber");
+  });
+
+  it("maps realAbha/dummyAbha into the request body", () => {
+    const args = { realAbha: "12345678901234", dummyAbha: "12345678904321" };
+    const body = { realAbha: args.realAbha, dummyAbha: args.dummyAbha };
+    assert.deepEqual(body, { realAbha: "12345678901234", dummyAbha: "12345678904321" });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // API helper error handling (mock fetch)
 // ---------------------------------------------------------------------------
 

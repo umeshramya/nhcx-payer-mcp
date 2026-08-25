@@ -15,6 +15,8 @@ export NDHM_CLIENT_SECRET=your-sandbox-secret
 export PAYER_ID=1518
 export SENDER_CODE=1000000001
 export MEMBER_ID=your-test-patient-id
+export REAL_ABHA=12345678901234
+export DUMMY_ABHA=12345678904321
 
 # 3. Run via npx (no install needed)
 npx nhcx-payer-mcp
@@ -39,7 +41,9 @@ Add to your MCP host (Claude Desktop, VS Code, etc.):
         "NDHM_CLIENT_SECRET": "your-sandbox-secret",
         "PAYER_ID": "1518",
         "SENDER_CODE": "1000000001",
-        "MEMBER_ID": "your-test-patient-id"
+        "MEMBER_ID": "your-test-patient-id",
+        "REAL_ABHA": "12345678901234",
+        "DUMMY_ABHA": "12345678904321"
       }
     }
   }
@@ -64,6 +68,8 @@ Add to your MCP host (Claude Desktop, VS Code, etc.):
 | `PAYER_ID` | `1518` | Your payer code (used as `receivercode` in API calls) |
 | `SENDER_CODE` | — | Default provider/sender code for testing |
 | `MEMBER_ID` | — | Default patient ABHA/PMJAY member ID for testing |
+| `REAL_ABHA` | — | Default real ABHA number for `nhcx_update_abha_number` |
+| `DUMMY_ABHA` | — | Default dummy ABHA number for `nhcx_update_abha_number` |
 | `NHCX_TIMEOUT` | `30000` | API request timeout in milliseconds |
 | `NHCX_RETRIES` | `0` | Auto-retries on transient errors (5xx, network) |
 | `DEBUG` | `false` | Set to `true` for debug logging to stderr |
@@ -131,6 +137,17 @@ Show the full payer workflow with steps, usecase per step, roles, and allowed ac
 ```
 Input:  (none)
 Output: { ok, result: { workflow: [...] } }
+```
+
+### `nhcx_update_abha_number`
+
+Map a real ABHA number to a dummy ABHA number for cyclic-procedure claim testing. Replaces the real ABHA captured during biometric authentication with the dummy ABHA used in the claim, so claim validation can locate the dummy beneficiary's biometric records. For lower/test environments only.
+
+```
+Input:  realAbha (required) — real ABHA number captured during biometric auth
+        dummyAbha (required) — dummy ABHA number used in the claim request
+        (both default from REAL_ABHA / DUMMY_ABHA env vars)
+Output: { ok, result: { realAbha, dummyAbha, rawResponse } }
 ```
 
 ## Payer Workflow
