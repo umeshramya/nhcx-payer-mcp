@@ -71,6 +71,14 @@ Add to your MCP host (Claude Desktop, VS Code, etc.):
 | `MEMBER_ID` | — | Default patient ABHA/PMJAY member ID for testing |
 | `REAL_ABHA` | — | Default real ABHA number for `nhcx_update_abha_number` |
 | `DUMMY_ABHA` | — | Default dummy ABHA number for `nhcx_update_abha_number` |
+| `PAYMENT_UTR` | `SAYAN12345` | Default UTR / transaction reference for `nhcx_update_payment` |
+| `PAYER_PORTAL_UID` | `USER4007` | Payer-portal identity header (`uid`) for payment update |
+| `PAYER_PORTAL_UNAME` | `Shubham` | Payer-portal identity header (`uname`) for payment update |
+| `PAYER_PORTAL_UROLE` | `System` | Payer-portal identity header (`urole`) for payment update |
+| `PAYER_PORTAL_USTATE` | `112` | Payer-portal identity header (`ustate`) for payment update |
+| `PAYER_PORTAL_SOURCE` | `internal` | Payer-portal identity header (`source`) for payment update |
+| `PAYER_PORTAL_HID` | `0` | Payer-portal identity header (`hid`) for payment update |
+| `PAYER_PORTAL_CID` | `0` | Payer-portal identity header (`cid`) for payment update |
 | `NHCX_TIMEOUT` | `30000` | API request timeout in milliseconds |
 | `NHCX_RETRIES` | `0` | Auto-retries on transient errors (5xx, network) |
 | `DEBUG` | `false` | Set to `true` for debug logging to stderr |
@@ -151,6 +159,33 @@ Input:  realAbha (required) — real ABHA number captured during biometric auth
 Output: { ok, result: { realAbha, dummyAbha, rawResponse } }
 ```
 
+### `nhcx_get_payment_details`
+
+Step 1 of 2 of the PMJAY payment flow. Fetch payment details for a registration from the ABDM/NHCX payer service. Returns the `caseid`, `amount`, `transactiondate` and `paymentrequestid` that the payment-update step needs.
+
+```
+Input:  registrationId (required) — PMJAY registration ID
+        payerId (optional, default from env)
+Output: { ok, result: { registrationId, payerId, paymentDetails, nextStep, rawResponse } }
+```
+
+### `nhcx_update_payment`
+
+Step 2 of 2 of the PMJAY payment flow. Post the payment update (UTR / status) for a case to the NHA payer portal. This endpoint is authenticated by portal identity headers (`uid`, `uname`, `urole`, `pid`, `cid`, `ustate`, `source`), **not** a bearer token. Use the values returned by `nhcx_get_payment_details`.
+
+```
+Input:  caseId (required) — from step 1
+        amount (required) — from step 1
+        transactionDate (required) — from step 1
+        paymentRequestId (required) — from step 1
+        type (optional, default "Normal")
+        utrno (optional, default from PAYMENT_UTR)
+        status (optional, default "Paid")
+        remarks (optional, default "Testing")
+        payerId (optional, default from env; sent as the pid header)
+Output: { ok, result: { caseId, utrno, status, protocolStatus, rawResponse } }
+```
+
 ## Payer Workflow
 
 | Step | Usecase | Role | Actions |
@@ -170,6 +205,11 @@ Output: { ok, result: { realAbha, dummyAbha, rawResponse } }
 3. Process case: `nhcx_process_case(caseId: "...", action: "Approve", senderCode: "...", memberId: "...")`
 
 For CLAIM workflow, repeat steps 2-3 through all 6 steps in sequence.
+
+### PMJAY payment flow
+
+1. Get payment details: `nhcx_get_payment_details(registrationId: "REG...")`
+2. Post payment update: `nhcx_update_payment(caseId, amount, transactionDate, paymentRequestId)` — using the values step 1 returned.
 
 ## Troubleshooting
 

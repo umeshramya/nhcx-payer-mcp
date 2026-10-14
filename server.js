@@ -33,6 +33,14 @@ const config = {
   memberId: process.env.MEMBER_ID || "",
   realAbha: process.env.REAL_ABHA || "",
   dummyAbha: process.env.DUMMY_ABHA || "",
+  paymentUtr: process.env.PAYMENT_UTR || "SAYAN12345",
+  portalUid: process.env.PAYER_PORTAL_UID || "USER4007",
+  portalUname: process.env.PAYER_PORTAL_UNAME || "Shubham",
+  portalUrole: process.env.PAYER_PORTAL_UROLE || "System",
+  portalUstate: process.env.PAYER_PORTAL_USTATE || "112",
+  portalSource: process.env.PAYER_PORTAL_SOURCE || "internal",
+  portalHid: process.env.PAYER_PORTAL_HID || "0",
+  portalCid: process.env.PAYER_PORTAL_CID || "0",
   timeout: parseInt(process.env.NHCX_TIMEOUT, 10) || 30000,
   retries: parseInt(process.env.NHCX_RETRIES, 10) || 0,
   debug: process.env.DEBUG === "true",
@@ -51,6 +59,8 @@ function getUrls() {
     userRole: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/v1",
     processCase: "https://apisbeta.nha.gov.in/pmjay/hcx/nhcxpayerservice/wrapper",
     updateAbha: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/participanthcxservice",
+    paymentDetails: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/v1",
+    paymentUpdate: "https://apisbeta.nha.gov.in/pmjay/payer/paypayment/v1",
     cmId: "sbx",
   };
 }
@@ -201,6 +211,62 @@ function shouldRetry(e) {
 }
 
 // ---------------------------------------------------------------------------
+// Payer-portal API helper
+//
+// The payment-update endpoint sits on the NHA payer portal, not the ABDM
+// gateway: it is authenticated by the portal identity headers (uid/uname/
+// urole/pid/cid/ustate/source), NOT by a bearer token. Same timeout/retry
+// semantics as nhcxApi.
+// ---------------------------------------------------------------------------
+
+async function payerPortalApi(baseUrl, path, headers, body) {
+  const url = `${baseUrl}${path}`;
+  let lastError;
+
+  for (let attempt = 0; attempt <= config.retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), config.timeout);
+
+    try {
+      const opts = {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...headers,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      };
+
+      debug(`POST ${url} ${JSON.stringify(body)}`);
+
+      const res = await fetch(url, opts);
+      clearTimeout(timer);
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text}`);
+      }
+
+      return await res.json();
+    } catch (e) {
+      clearTimeout(timer);
+      lastError = e;
+
+      if (attempt < config.retries && shouldRetry(e)) {
+        debug(`Retry ${attempt + 1}/${config.retries} after: ${e.message}`);
+        await new Promise(r => setTimeout(r, 500));
+        continue;
+      }
+      throw lastError;
+    }
+  }
+
+  throw lastError;
+}
+
+// ---------------------------------------------------------------------------
 // Response helpers
 // ---------------------------------------------------------------------------
 
@@ -325,6 +391,67 @@ function buildTools() {
         required: ["realAbha", "dummyAbha"],
       },
     },
+    {
+      name: "nhcx_get_payment_details",
+      description:
+        "Step 1 of 2 of the PMJAY payment flow. Fetch the payment details for a " +
+        "registration from the ABDM/NHCX payer service — returns the caseid, amount, " +
+        "transactiondate and paymentrequestid that the payment-update step needs. " +
+        "Call this first, then pass its output to nhcx_update_payment.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          registrationId: {
+            type: "string",
+            description: "PMJAY registration ID (registrationid) to fetch payment details for",
+          },
+          payerId: {
+            type: "string",
+            description: "Payer ID",
+            ...(config.payerId ? { default: config.payerId } : {}),
+          },
+        },
+        required: ["registrationId"],
+      },
+    },
+    {
+      name: "nhcx_update_payment",
+      description:
+        "Step 2 of 2 of the PMJAY payment flow. Post the payment update (UTR/status) for a " +
+        "case to the NHA payer portal. Authenticated by portal identity headers, not a " +
+        "bearer token. Use the values returned by nhcx_get_payment_details.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          caseId: { type: "string", description: "Case ID (caseid) from step 1" },
+          amount: {
+            description: "Payment amount from step 1 (number or string)",
+          },
+          transactionDate: {
+            type: "string",
+            description: "Transaction date from step 1 (as returned)",
+          },
+          paymentRequestId: {
+            type: "string",
+            description: "Payment request ID (paymentrequestid) from step 1",
+          },
+          type: { type: "string", description: "Payment type", default: "Normal" },
+          utrno: {
+            type: "string",
+            description: "UTR / transaction reference number",
+            default: config.paymentUtr,
+          },
+          status: { type: "string", description: "Payment status", default: "Paid" },
+          remarks: { type: "string", description: "Remarks", default: "Testing" },
+          payerId: {
+            type: "string",
+            description: "Payer ID (sent as the pid header)",
+            ...(config.payerId ? { default: config.payerId } : {}),
+          },
+        },
+        required: ["caseId", "amount", "transactionDate", "paymentRequestId"],
+      },
+    },
   ];
 }
 
@@ -349,6 +476,14 @@ async function handleValidateConfig() {
     MEMBER_ID: config.memberId || "(not set)",
     REAL_ABHA: config.realAbha || "(not set)",
     DUMMY_ABHA: config.dummyAbha || "(not set)",
+    PAYMENT_UTR: config.paymentUtr,
+    PAYER_PORTAL_UID: config.portalUid,
+    PAYER_PORTAL_UNAME: config.portalUname,
+    PAYER_PORTAL_UROLE: config.portalUrole,
+    PAYER_PORTAL_USTATE: config.portalUstate,
+    PAYER_PORTAL_SOURCE: config.portalSource,
+    PAYER_PORTAL_HID: config.portalHid,
+    PAYER_PORTAL_CID: config.portalCid,
     NHCX_TIMEOUT: `${config.timeout}ms`,
     NHCX_RETRIES: config.retries,
     DEBUG: config.debug,
@@ -356,6 +491,8 @@ async function handleValidateConfig() {
       userRole: urls.userRole,
       processCase: urls.processCase,
       updateAbha: urls.updateAbha,
+      paymentDetails: urls.paymentDetails,
+      paymentUpdate: urls.paymentUpdate,
       cmId: urls.cmId,
     },
   };
@@ -364,6 +501,8 @@ async function handleValidateConfig() {
   let userRoleReachable = false;
   let processCaseReachable = false;
   let updateAbhaReachable = false;
+  let paymentDetailsReachable = false;
+  let paymentUpdateReachable = false;
 
   if (issues.length === 0) {
     try {
@@ -416,6 +555,28 @@ async function handleValidateConfig() {
       updateAbhaReachable = false;
       issues.push(`ABHA-update URL unreachable: ${urls.updateAbha}`);
     }
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      const r = await fetch(urls.paymentDetails, { signal: controller.signal });
+      clearTimeout(timer);
+      paymentDetailsReachable = true;
+    } catch {
+      paymentDetailsReachable = false;
+      issues.push(`Payment-details URL unreachable: ${urls.paymentDetails}`);
+    }
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      await fetch(urls.paymentUpdate, { signal: controller.signal });
+      clearTimeout(timer);
+      paymentUpdateReachable = true;
+    } catch {
+      paymentUpdateReachable = false;
+      issues.push(`Payment-update URL unreachable: ${urls.paymentUpdate}`);
+    }
   }
 
   return ok({
@@ -427,6 +588,8 @@ async function handleValidateConfig() {
       userRoleUrl: userRoleReachable ? "reachable" : "UNREACHABLE",
       processCaseUrl: processCaseReachable ? "reachable" : "UNREACHABLE",
       updateAbhaUrl: updateAbhaReachable ? "reachable" : "UNREACHABLE",
+      paymentDetailsUrl: paymentDetailsReachable ? "reachable" : "UNREACHABLE",
+      paymentUpdateUrl: paymentUpdateReachable ? "reachable" : "UNREACHABLE",
     },
   });
 }
@@ -558,6 +721,69 @@ async function handleUpdateAbhaNumber(args) {
   });
 }
 
+async function handleGetPaymentDetails(args) {
+  const token = await getAccessToken();
+  const urls = getUrls();
+
+  const body = {
+    registrationid: args.registrationId,
+    payerid: args.payerId || config.payerId,
+  };
+
+  const result = await nhcxApi(urls.paymentDetails, "/get/payment/details", token, body);
+
+  return ok({
+    registrationId: args.registrationId,
+    payerId: body.payerid,
+    paymentDetails: {
+      caseid: result?.caseid,
+      amount: result?.amount,
+      transactiondate: result?.transactiondate,
+      paymentrequestid: result?.paymentrequestid,
+    },
+    nextStep:
+      "Pass caseid, amount, transactiondate and paymentrequestid to nhcx_update_payment.",
+    rawResponse: result,
+  });
+}
+
+async function handleUpdatePayment(args) {
+  const urls = getUrls();
+  const payerId = args.payerId || config.payerId;
+
+  const headers = {
+    uid: config.portalUid,
+    uname: config.portalUname,
+    urole: config.portalUrole,
+    hid: config.portalHid,
+    pid: payerId,
+    cid: config.portalCid,
+    ustate: config.portalUstate,
+    source: config.portalSource,
+  };
+
+  const body = {
+    type: args.type || "Normal",
+    utrno: args.utrno || config.paymentUtr,
+    status: args.status || "Paid",
+    remarks: args.remarks || "Testing",
+    caseid: args.caseId,
+    amount: args.amount,
+    transactiondate: args.transactionDate,
+    paymentrequestid: args.paymentRequestId,
+  };
+
+  const result = await payerPortalApi(urls.paymentUpdate, "/payment/update", headers, body);
+
+  return ok({
+    caseId: args.caseId,
+    utrno: body.utrno,
+    status: body.status,
+    protocolStatus: result?.result?.protocol_status,
+    rawResponse: result,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Server setup
 // ---------------------------------------------------------------------------
@@ -565,7 +791,7 @@ async function handleUpdateAbhaNumber(args) {
 const tools = buildTools();
 
 const server = new Server(
-  { name: "nhcx-payer-mcp", version: "1.6.1" },
+  { name: "nhcx-payer-mcp", version: "1.7.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -588,6 +814,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return handleWorkflow();
       case "nhcx_update_abha_number":
         return await handleUpdateAbhaNumber(args);
+      case "nhcx_get_payment_details":
+        return await handleGetPaymentDetails(args);
+      case "nhcx_update_payment":
+        return await handleUpdatePayment(args);
       default:
         return fail(`Unknown tool: ${name}`);
     }

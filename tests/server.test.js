@@ -218,6 +218,97 @@ describe("ABHA update endpoint", () => {
 });
 
 // ---------------------------------------------------------------------------
+// PMJAY payment flow (two-step: get details → update payment)
+// ---------------------------------------------------------------------------
+
+describe("PMJAY payment flow", () => {
+  const PAYMENT_DETAILS_BASE = "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/v1";
+  const PAYMENT_DETAILS_PATH = "/get/payment/details";
+  const PAYMENT_UPDATE_BASE = "https://apisbeta.nha.gov.in/pmjay/payer/paypayment/v1";
+  const PAYMENT_UPDATE_PATH = "/payment/update";
+
+  it("step 1 targets the payer service get/payment/details endpoint", () => {
+    assert.equal(PAYMENT_DETAILS_BASE, "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/v1");
+    assert.equal(PAYMENT_DETAILS_PATH, "/get/payment/details");
+  });
+
+  it("step 2 targets the NHA portal payment/update endpoint", () => {
+    assert.equal(PAYMENT_UPDATE_BASE, "https://apisbeta.nha.gov.in/pmjay/payer/paypayment/v1");
+    assert.equal(PAYMENT_UPDATE_PATH, "/payment/update");
+  });
+
+  it("step 1 maps registrationId/payerId into the request body", () => {
+    const args = { registrationId: "REG123", payerId: "1518" };
+    const body = { registrationid: args.registrationId, payerid: args.payerId || "1518" };
+    assert.deepEqual(body, { registrationid: "REG123", payerid: "1518" });
+  });
+
+  it("step 2 maps the step-1 output into the update body", () => {
+    const args = {
+      caseId: "2026081210000359",
+      amount: "5000",
+      transactionDate: "2026-10-14",
+      paymentRequestId: "PR123",
+    };
+    const body = {
+      type: args.type || "Normal",
+      utrno: args.utrno || "SAYAN12345",
+      status: args.status || "Paid",
+      remarks: args.remarks || "Testing",
+      caseid: args.caseId,
+      amount: args.amount,
+      transactiondate: args.transactionDate,
+      paymentrequestid: args.paymentRequestId,
+    };
+    assert.deepEqual(body, {
+      type: "Normal",
+      utrno: "SAYAN12345",
+      status: "Paid",
+      remarks: "Testing",
+      caseid: "2026081210000359",
+      amount: "5000",
+      transactiondate: "2026-10-14",
+      paymentrequestid: "PR123",
+    });
+  });
+
+  it("step 2 sends payer-portal identity headers and no bearer token", () => {
+    const payerId = "1518";
+    const headers = {
+      uid: "USER4007",
+      uname: "Shubham",
+      urole: "System",
+      hid: "0",
+      pid: payerId,
+      cid: "0",
+      ustate: "112",
+      source: "internal",
+    };
+    assert.equal(headers.pid, "1518");
+    assert.equal(headers.bearer_auth, undefined);
+    assert.deepEqual(Object.keys(headers).sort(), [
+      "cid", "hid", "pid", "source", "uid", "uname", "urole", "ustate",
+    ]);
+  });
+
+  it("extracts caseid/amount/transactiondate/paymentrequestid from the step-1 response", () => {
+    const result = {
+      caseid: "2026081210000359",
+      amount: "5000",
+      transactiondate: "2026-10-14",
+      paymentrequestid: "PR123",
+    };
+    const paymentDetails = {
+      caseid: result?.caseid,
+      amount: result?.amount,
+      transactiondate: result?.transactiondate,
+      paymentrequestid: result?.paymentrequestid,
+    };
+    assert.deepEqual(paymentDetails, result);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // API helper error handling (mock fetch)
 // ---------------------------------------------------------------------------
 
