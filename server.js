@@ -51,18 +51,54 @@ function debug(...args) {
 }
 
 // ---------------------------------------------------------------------------
-// Hardcoded API endpoints
+// API endpoints — NHCX_ENV selects the host set, per-endpoint env vars override
 // ---------------------------------------------------------------------------
 
-function getUrls() {
-  return {
+const HOSTS = {
+  sandbox: {
     userRole: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/v1",
     processCase: "https://apisbeta.nha.gov.in/pmjay/hcx/nhcxpayerservice/wrapper",
     updateAbha: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/participanthcxservice",
     paymentDetails: "https://apisbx.abdm.gov.in/pmjay/sbxhcx/nhcxpayerservice/v1",
     paymentUpdate: "https://apisbeta.nha.gov.in/pmjay/payer/paypayment/v1",
     cmId: "sbx",
+  },
+  // "staging" and "production" use the same shape, with hosts supplied by NHA.
+  // Unknown NHCX_ENV values fall back to sandbox so a typo never silently
+  // sends traffic to a production host.
+};
+
+function getUrls() {
+  const base = HOSTS[config.env] || HOSTS.sandbox;
+  return {
+    userRole: process.env.NHCX_USER_ROLE_URL || base.userRole,
+    processCase: process.env.NHCX_PROCESS_CASE_URL || base.processCase,
+    updateAbha: process.env.NHCX_UPDATE_ABHA_URL || base.updateAbha,
+    paymentDetails: process.env.NHCX_PAYMENT_DETAILS_URL || base.paymentDetails,
+    paymentUpdate: process.env.NHCX_PAYMENT_UPDATE_URL || base.paymentUpdate,
+    cmId: base.cmId,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Payer value normalisation
+// ---------------------------------------------------------------------------
+
+/**
+ * Payer APIs key on the bare registration number:
+ * "PMJAY/HP/S/2024/R2/2026102610000155" -> "2026102610000155".
+ * Anything without a slash is returned unchanged.
+ */
+function registrationNumber(value) {
+  const v = String(value ?? "").trim();
+  return v.includes("/") ? v.split("/").pop() : v;
+}
+
+/** Payment update needs DD/MM/YYYY; convert ISO (YYYY-MM-DD), pass anything else through. */
+function payerDate(value) {
+  const v = String(value ?? "").trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : v;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,9 +310,11 @@ function ok(result) {
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, result }, null, 2) }] };
 }
 
-function fail(message) {
+function fail(message, extra = {}) {
   return {
-    content: [{ type: "text", text: JSON.stringify({ ok: false, error: { message } }, null, 2) }],
+    content: [
+      { type: "text", text: JSON.stringify({ ok: false, error: { message, ...extra } }, null, 2) },
+    ],
     isError: true,
   };
 }
@@ -394,16 +432,22 @@ function buildTools() {
     {
       name: "nhcx_get_payment_details",
       description:
-        "Step 1 of 2 of the PMJAY payment flow. Fetch the payment details for a " +
-        "registration from the ABDM/NHCX payer service — returns the caseid, amount, " +
-        "transactiondate and paymentrequestid that the payment-update step needs. " +
-        "Call this first, then pass its output to nhcx_update_payment.",
+        "Step 1 of 2 of the PMJAY payment flow. Reads the payment the payer has created " +
+        "for a registration and returns the caseid, amount, transactiondate and " +
+        "paymentrequestid that step 2 (nhcx_update_payment) needs, unchanged. " +
+        "The registration may be given as the full case number " +
+        "(PMJAY/HP/S/2024/R2/2026102610000155) or the bare number — the prefix is " +
+        "stripped automatically for this call. Note that the returned caseid comes back " +
+        "in the full prefixed form and must be passed to step 2 verbatim. This returns " +
+        "PAYR-1401 until the payer has issued the first payment notice for the case.",
       inputSchema: {
         type: "object",
         properties: {
           registrationId: {
             type: "string",
-            description: "PMJAY registration ID (registrationid) to fetch payment details for",
+            description:
+              "Case number to read payment details for — full (PMJAY/HP/S/2024/R2/…) or " +
+              "bare. The PMJAY/… prefix is stripped before the call.",
           },
           payerId: {
             type: "string",
@@ -417,23 +461,33 @@ function buildTools() {
     {
       name: "nhcx_update_payment",
       description:
-        "Step 2 of 2 of the PMJAY payment flow. Post the payment update (UTR/status) for a " +
-        "case to the NHA payer portal. Authenticated by portal identity headers, not a " +
-        "bearer token. Use the values returned by nhcx_get_payment_details.",
+        "Step 2 of 2 of the PMJAY payment flow. Posts the payment update (UTR/status) for " +
+        "the case to the NHA payer portal, closing the loop opened by step 1 " +
+        "(nhcx_get_payment_details). Pass that step's caseid, amount, transactiondate and " +
+        "paymentrequestid unchanged. Authenticated by payer-portal identity headers, not " +
+        "a bearer token. Returns ERR-PYR-PAY-004 if the case id is not one the portal " +
+        "knows — always pass step 1's caseid as-is rather than reconstructing it.",
       inputSchema: {
         type: "object",
         properties: {
-          caseId: { type: "string", description: "Case ID (caseid) from step 1" },
+          caseId: {
+            type: "string",
+            description:
+              "caseid returned by step 1, verbatim — usually the full PMJAY/... form; " +
+              "do not strip or reformat it",
+          },
           amount: {
-            description: "Payment amount from step 1 (number or string)",
+            description: "amount returned by step 1 (number or string)",
           },
           transactionDate: {
             type: "string",
-            description: "Transaction date from step 1 (as returned)",
+            description:
+              "transactiondate returned by step 1 (DD/MM/YYYY). ISO YYYY-MM-DD is also " +
+              "accepted and converted.",
           },
           paymentRequestId: {
             type: "string",
-            description: "Payment request ID (paymentrequestid) from step 1",
+            description: "paymentrequestid returned by step 1",
           },
           type: { type: "string", description: "Payment type", default: "Normal" },
           utrno: {
@@ -471,6 +525,9 @@ async function handleValidateConfig() {
     NDHM_CLIENT_SECRET: config.clientSecret ? "set" : "MISSING",
     NDHM_URL: config.authUrl,
     NHCX_ENV: config.env,
+    hostSet: HOSTS[config.env]
+      ? config.env
+      : `sandbox (no host set defined for "${config.env}")`,
     PAYER_ID: config.payerId,
     SENDER_CODE: config.senderCode || "(not set)",
     MEMBER_ID: config.memberId || "(not set)",
@@ -641,8 +698,8 @@ async function handleProcessCase(args) {
   const token = await getAccessToken();
   const urls = getUrls();
 
-  // Strip prefix like "PMJAY/HP/S/2024/R2/" — process/case only accepts numeric ID
-  const numericCaseId = args.caseId.includes("/") ? args.caseId.split("/").pop() : args.caseId;
+  // process/case only accepts the numeric ID, not "PMJAY/HP/S/2024/R2/..."
+  const numericCaseId = registrationNumber(args.caseId);
 
   // Derive usecase from the CURRENT role, not just the action. "Approve"/"Reject"
   // appear in multiple steps (PREAUTH, MAC, ACO, SHA, Claim Review), so an
@@ -721,66 +778,173 @@ async function handleUpdateAbhaNumber(args) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Payer error hints — the raw bodies are "HTTP 400: {"error":{"code":...}}"
+// ---------------------------------------------------------------------------
+
+const PAYER_HINTS = {
+  "PAYR-1401": (ctx) =>
+    `No payment details for registration "${ctx.registrationNumber}". Either that ` +
+    `registration number does not match a case, or the payer has not issued the first ` +
+    `payment notice for the case yet — step 1 returns nothing before that notice exists.`,
+  "ERR-PYR-PAY-004": () =>
+    `The NHA payer portal has no active case for this case id. Pass the caseid returned ` +
+    `by step 1 (nhcx_get_payment_details) exactly as it came back — it is usually the ` +
+    `full PMJAY/... case number and must not be reformatted or stripped.`,
+};
+
+function parsePayerError(message) {
+  const m = /^HTTP (\d{3}):\s*([\s\S]*)$/.exec(String(message ?? ""));
+  if (!m) return { message: String(message ?? "") };
+
+  const parsed = { status: Number(m[1]), rawResponse: m[2] };
+  try {
+    const body = JSON.parse(m[2]);
+    parsed.code = body?.error?.code || body?.code;
+    parsed.description = body?.error?.message || body?.message;
+  } catch {
+    // Not JSON — keep the raw body only.
+  }
+  return parsed;
+}
+
+function payerErrorMessage(parsed, ctx = {}) {
+  const hint = parsed.code && PAYER_HINTS[parsed.code];
+  if (hint) return hint(ctx);
+
+  const bits = [
+    parsed.status ? `HTTP ${parsed.status}` : null,
+    parsed.code ? `code ${parsed.code}` : null,
+    parsed.description || parsed.rawResponse || parsed.message,
+  ].filter(Boolean);
+  return `Payer request failed: ${bits.join(" — ")}`;
+}
+
+/** Runs a payment handler and rethrows with a readable message + the parsed error. */
+async function withPayerErrors(ctx, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    const parsed = e.payerError || parsePayerError(e.message);
+    // Only reshape HTTP failures from the payer; auth/config errors pass through as-is.
+    if (!parsed.status && !parsed.code) throw e;
+    const error = new Error(payerErrorMessage(parsed, ctx));
+    error.payerError = parsed;
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PMJAY payment flow — step 1 of 2
+// ---------------------------------------------------------------------------
+
 async function handleGetPaymentDetails(args) {
-  const token = await getAccessToken();
-  const urls = getUrls();
+  const registration = registrationNumber(args.registrationId);
 
-  const body = {
-    registrationid: args.registrationId,
-    payerid: args.payerId || config.payerId,
-  };
+  return withPayerErrors({ registrationNumber: registration }, async () => {
+    const token = await getAccessToken();
+    const urls = getUrls();
 
-  const result = await nhcxApi(urls.paymentDetails, "/get/payment/details", token, body);
+    const body = {
+      registrationid: registration,
+      payerid: args.payerId || config.payerId,
+    };
 
-  return ok({
-    registrationId: args.registrationId,
-    payerId: body.payerid,
-    paymentDetails: {
-      caseid: result?.caseid,
-      amount: result?.amount,
-      transactiondate: result?.transactiondate,
-      paymentrequestid: result?.paymentrequestid,
-    },
-    nextStep:
-      "Pass caseid, amount, transactiondate and paymentrequestid to nhcx_update_payment.",
-    rawResponse: result,
+    const result = await nhcxApi(urls.paymentDetails, "/get/payment/details", token, body);
+
+    const paymentDetails = {
+      caseid: result?.caseid ?? null,
+      amount: result?.amount ?? null,
+      transactiondate: result?.transactiondate ?? null,
+      paymentrequestid: result?.paymentrequestid ?? null,
+    };
+
+    return ok({
+      step: "1/2",
+      registrationId: args.registrationId,
+      registrationNumber: registration,
+      payerId: body.payerid,
+      paymentDetails,
+      ...(paymentDetails.caseid
+        ? {
+            nextStep:
+              "Call nhcx_update_payment with these values from paymentDetails: " +
+              `caseId="${paymentDetails.caseid}", amount=${paymentDetails.amount}, ` +
+              `transactionDate="${paymentDetails.transactiondate}", ` +
+              `paymentRequestId="${paymentDetails.paymentrequestid}".`,
+          }
+        : {
+            warning:
+              "Payer returned no payment details — the first payment notice for this " +
+              "case has probably not been issued yet. Step 1 has nothing to return until " +
+              "it has.",
+          }),
+      rawResponse: result,
+    });
   });
 }
 
+// ---------------------------------------------------------------------------
+// PMJAY payment flow — step 2 of 2
+// ---------------------------------------------------------------------------
+
 async function handleUpdatePayment(args) {
-  const urls = getUrls();
-  const payerId = args.payerId || config.payerId;
+  const missing = ["caseId", "amount", "transactionDate", "paymentRequestId"].filter(
+    (key) => args[key] === undefined || args[key] === null || String(args[key]).trim() === ""
+  );
+  if (missing.length) {
+    return fail(
+      `Step 2 of 2 needs the values returned by step 1 (nhcx_get_payment_details). ` +
+        `Missing: ${missing.join(", ")}.`
+    );
+  }
 
-  const headers = {
-    uid: config.portalUid,
-    uname: config.portalUname,
-    urole: config.portalUrole,
-    hid: config.portalHid,
-    pid: payerId,
-    cid: config.portalCid,
-    ustate: config.portalUstate,
-    source: config.portalSource,
-  };
+  const transactionDateSent = payerDate(args.transactionDate);
 
-  const body = {
-    type: args.type || "Normal",
-    utrno: args.utrno || config.paymentUtr,
-    status: args.status || "Paid",
-    remarks: args.remarks || "Testing",
-    caseid: args.caseId,
-    amount: args.amount,
-    transactiondate: args.transactionDate,
-    paymentrequestid: args.paymentRequestId,
-  };
+  return withPayerErrors({}, async () => {
+    const urls = getUrls();
+    const payerId = args.payerId || config.payerId;
 
-  const result = await payerPortalApi(urls.paymentUpdate, "/payment/update", headers, body);
+    const headers = {
+      uid: config.portalUid,
+      uname: config.portalUname,
+      urole: config.portalUrole,
+      hid: config.portalHid,
+      pid: payerId,
+      cid: config.portalCid,
+      ustate: config.portalUstate,
+      source: config.portalSource,
+    };
 
-  return ok({
-    caseId: args.caseId,
-    utrno: body.utrno,
-    status: body.status,
-    protocolStatus: result?.result?.protocol_status,
-    rawResponse: result,
+    const body = {
+      type: args.type || "Normal",
+      utrno: args.utrno || config.paymentUtr,
+      status: args.status || "Paid",
+      remarks: args.remarks || "Testing",
+      caseid: args.caseId,
+      amount: args.amount,
+      transactiondate: transactionDateSent,
+      paymentrequestid: args.paymentRequestId,
+    };
+
+    const result = await payerPortalApi(urls.paymentUpdate, "/payment/update", headers, body);
+
+    return ok({
+      step: "2/2",
+      inputs: {
+        caseId: body.caseid,
+        amount: body.amount,
+        transactionDate: args.transactionDate,
+        transactionDateSent,
+        paymentRequestId: body.paymentrequestid,
+        type: body.type,
+        utrno: body.utrno,
+        status: body.status,
+        remarks: body.remarks,
+      },
+      protocolStatus: result?.result?.protocol_status,
+      rawResponse: result,
+    });
   });
 }
 
@@ -791,7 +955,7 @@ async function handleUpdatePayment(args) {
 const tools = buildTools();
 
 const server = new Server(
-  { name: "nhcx-payer-mcp", version: "1.7.0" },
+  { name: "nhcx-payer-mcp", version: "1.8.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -823,7 +987,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   } catch (e) {
     debug("Error:", e.message);
-    return fail(e.message);
+    return fail(e.message, e.payerError || {});
   }
 });
 
@@ -832,6 +996,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // ---------------------------------------------------------------------------
 
 debug(`Starting nhcx-payer-mcp (env: ${config.env}, timeout: ${config.timeout}ms, retries: ${config.retries})`);
+if (!HOSTS[config.env]) {
+  debug(`No host set for NHCX_ENV="${config.env}" — using sandbox hosts (override with NHCX_*_URL)`);
+}
+debug("Endpoints:", getUrls());
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

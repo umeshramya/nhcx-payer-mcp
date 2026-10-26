@@ -51,11 +51,61 @@ function ok(result) {
   return { content: [{ type: "text", text: JSON.stringify({ ok: true, result }, null, 2) }] };
 }
 
-function fail(message) {
+function fail(message, extra = {}) {
   return {
-    content: [{ type: "text", text: JSON.stringify({ ok: false, error: { message } }, null, 2) }],
+    content: [
+      { type: "text", text: JSON.stringify({ ok: false, error: { message, ...extra } }, null, 2) },
+    ],
     isError: true,
   };
+}
+
+function registrationNumber(value) {
+  const v = String(value ?? "").trim();
+  return v.includes("/") ? v.split("/").pop() : v;
+}
+
+function payerDate(value) {
+  const v = String(value ?? "").trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : v;
+}
+
+const PAYER_HINTS = {
+  "PAYR-1401": (ctx) =>
+    `No payment details for registration "${ctx.registrationNumber}". Either that ` +
+    `registration number does not match a case, or the payer has not issued the first ` +
+    `payment notice for the case yet — step 1 returns nothing before that notice exists.`,
+  "ERR-PYR-PAY-004": () =>
+    `The NHA payer portal has no active case for this case id. Pass the caseid returned ` +
+    `by step 1 (nhcx_get_payment_details) verbatim — not the provider-side case number.`,
+};
+
+function parsePayerError(message) {
+  const m = /^HTTP (\d{3}):\s*([\s\S]*)$/.exec(String(message ?? ""));
+  if (!m) return { message: String(message ?? "") };
+
+  const parsed = { status: Number(m[1]), rawResponse: m[2] };
+  try {
+    const body = JSON.parse(m[2]);
+    parsed.code = body?.error?.code || body?.code;
+    parsed.description = body?.error?.message || body?.message;
+  } catch {
+    // Not JSON — keep the raw body only.
+  }
+  return parsed;
+}
+
+function payerErrorMessage(parsed, ctx = {}) {
+  const hint = parsed.code && PAYER_HINTS[parsed.code];
+  if (hint) return hint(ctx);
+
+  const bits = [
+    parsed.status ? `HTTP ${parsed.status}` : null,
+    parsed.code ? `code ${parsed.code}` : null,
+    parsed.description || parsed.rawResponse || parsed.message,
+  ].filter(Boolean);
+  return `Payer request failed: ${bits.join(" — ")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +307,7 @@ describe("PMJAY payment flow", () => {
       remarks: args.remarks || "Testing",
       caseid: args.caseId,
       amount: args.amount,
-      transactiondate: args.transactionDate,
+      transactiondate: payerDate(args.transactionDate),
       paymentrequestid: args.paymentRequestId,
     };
     assert.deepEqual(body, {
@@ -267,7 +317,7 @@ describe("PMJAY payment flow", () => {
       remarks: "Testing",
       caseid: "2026081210000359",
       amount: "5000",
-      transactiondate: "2026-10-14",
+      transactiondate: "14/10/2026",
       paymentrequestid: "PR123",
     });
   });
@@ -305,6 +355,119 @@ describe("PMJAY payment flow", () => {
       paymentrequestid: result?.paymentrequestid,
     };
     assert.deepEqual(paymentDetails, result);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Payer value normalisation
+// ---------------------------------------------------------------------------
+
+describe("registrationNumber", () => {
+  it("strips the PMJAY prefix", () => {
+    assert.equal(
+      registrationNumber("PMJAY/HP/S/2024/R2/2026102610000155"),
+      "2026102610000155"
+    );
+  });
+
+  it("leaves a bare number unchanged", () => {
+    assert.equal(registrationNumber("2026102610000155"), "2026102610000155");
+  });
+
+  it("keeps a prefixed payment-request id's last segment", () => {
+    assert.equal(registrationNumber("1825/2026102610000155"), "2026102610000155");
+  });
+
+  it("handles empty and non-string input", () => {
+    assert.equal(registrationNumber(""), "");
+    assert.equal(registrationNumber(undefined), "");
+    assert.equal(registrationNumber(null), "");
+    assert.equal(registrationNumber(2026102610000155), "2026102610000155");
+  });
+});
+
+describe("payerDate", () => {
+  it("converts ISO to DD/MM/YYYY", () => {
+    assert.equal(payerDate("2026-10-26"), "26/10/2026");
+  });
+
+  it("leaves an already-DD/MM/YYYY date unchanged", () => {
+    assert.equal(payerDate("26/10/2026"), "26/10/2026");
+  });
+
+  it("passes anything unexpected through", () => {
+    assert.equal(payerDate(""), "");
+    assert.equal(payerDate(undefined), "");
+    assert.equal(payerDate("26-10-2026"), "26-10-2026");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Payer error mapping
+// ---------------------------------------------------------------------------
+
+describe("parsePayerError", () => {
+  it("parses a PAYR-1401 body", () => {
+    const parsed = parsePayerError(
+      'HTTP 400: {"error":{"code":"PAYR-1401","message":"No payment details found"}}'
+    );
+    assert.equal(parsed.status, 400);
+    assert.equal(parsed.code, "PAYR-1401");
+    assert.equal(parsed.description, "No payment details found");
+  });
+
+  it("parses an ERR-PYR-PAY-004 body", () => {
+    const parsed = parsePayerError(
+      'HTTP 400: {"error":{"code":"ERR-PYR-PAY-004","message":"No active case found"}}'
+    );
+    assert.equal(parsed.code, "ERR-PYR-PAY-004");
+  });
+
+  it("keeps the raw text when the body is not JSON", () => {
+    const parsed = parsePayerError("HTTP 502: <html>bad gateway</html>");
+    assert.equal(parsed.status, 502);
+    assert.equal(parsed.code, undefined);
+    assert.equal(parsed.rawResponse, "<html>bad gateway</html>");
+  });
+
+  it("falls back to the message when there is no HTTP prefix", () => {
+    const parsed = parsePayerError("fetch failed");
+    assert.deepEqual(parsed, { message: "fetch failed" });
+  });
+});
+
+describe("payerErrorMessage", () => {
+  it("explains PAYR-1401 in terms of the registration number", () => {
+    const msg = payerErrorMessage(
+      { code: "PAYR-1401", status: 400 },
+      { registrationNumber: "2026102610000155" }
+    );
+    assert.match(msg, /2026102610000155/);
+    assert.match(msg, /first payment notice/i);
+  });
+
+  it("explains ERR-PYR-PAY-004 as the wrong case id", () => {
+    const msg = payerErrorMessage({ code: "ERR-PYR-PAY-004", status: 400 });
+    assert.match(msg, /step 1/);
+    assert.match(msg, /caseid/);
+  });
+
+  it("keeps status and code for an unknown code", () => {
+    const msg = payerErrorMessage({ code: "PAYR-9999", status: 400, rawResponse: "{}" });
+    assert.match(msg, /HTTP 400/);
+    assert.match(msg, /PAYR-9999/);
+  });
+});
+
+describe("fail envelope", () => {
+  it("merges extra error fields alongside the message", () => {
+    const res = fail("boom", { code: "PAYR-1401", status: 400 });
+    const payload = JSON.parse(res.content[0].text);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.error.message, "boom");
+    assert.equal(payload.error.code, "PAYR-1401");
+    assert.equal(payload.error.status, 400);
+    assert.equal(res.isError, true);
   });
 });
 
